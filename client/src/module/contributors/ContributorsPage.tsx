@@ -17,18 +17,44 @@ export default function ContributorsPage() {
   const [contributors, setContributors] = useState<Contributor[]>([]);
   const [allContributors, setAllContributors] = useState<Contributor[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchContributors = async () => {
       try {
+        const CACHE_KEY = "internhack_contributors_cache";
+        const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
+        // Check cache first
+        const cachedStr = sessionStorage.getItem(CACHE_KEY);
+        if (cachedStr) {
+          try {
+            const cached = JSON.parse(cachedStr);
+            if (Date.now() - cached.timestamp < CACHE_DURATION) {
+              setAllContributors(cached.data);
+              setContributors(cached.data.filter((c: Contributor) => c.contributions > 5));
+              setLoading(false);
+              return;
+            }
+          } catch (e) {
+            // Invalid cache, clear it
+            sessionStorage.removeItem(CACHE_KEY);
+          }
+        }
+
         let page = 1;
         let allData: Contributor[] = [];
+        let rateLimited = false;
 
         while (true) {
           const response = await fetch(
             `https://api.github.com/repos/Sachinchaurasiya360/InternHack/contributors?per_page=100&page=${page}`
           );
+
+          if (response.status === 403 || response.status === 429) {
+            rateLimited = true;
+            break;
+          }
 
           if (!response.ok) break;
 
@@ -42,17 +68,28 @@ export default function ContributorsPage() {
           page++;
         }
 
-        setAllContributors(allData);
-
-        // Only show contributors with more than 5 contributions
-        const filteredContributors = allData.filter(
-          (contributor) => contributor.contributions > 5
-        );
-
-        setContributors(filteredContributors);
-      } catch (error) {
-        console.error("Failed to fetch contributors", error);
-        setError(true);
+        if (rateLimited && allData.length === 0 && cachedStr) {
+           // Fallback to expired cache if rate limited and no new data
+           const cached = JSON.parse(cachedStr);
+           setAllContributors(cached.data);
+           setContributors(cached.data.filter((c: Contributor) => c.contributions > 5));
+        } else if (allData.length > 0) {
+          // Success, update cache
+          sessionStorage.setItem(CACHE_KEY, JSON.stringify({ data: allData, timestamp: Date.now() }));
+          setAllContributors(allData);
+          setContributors(allData.filter((c) => c.contributions > 5));
+        } else if (rateLimited) {
+           throw new Error("RATE_LIMITED");
+        } else {
+           throw new Error("Failed to fetch");
+        }
+      } catch (err: unknown) {
+        console.error("Failed to fetch contributors", err);
+        if (err instanceof Error && err.message === "RATE_LIMITED") {
+          setError("Wow, our community is so popular we hit the GitHub API limit! Check back in an hour to see our amazing contributors.");
+        } else {
+          setError("Could not load contributors. Please try again later.");
+        }
       } finally {
         setLoading(false);
       }
@@ -167,9 +204,11 @@ export default function ContributorsPage() {
 
           {/* Loading Skeleton / Error / Grid */}
           {error ? (
-            <p className="text-center text-stone-500 dark:text-stone-400 py-20">
-              Could not load contributors. Please try again later.
-            </p>
+            <div className="text-center py-20 max-w-2xl mx-auto">
+              <p className="text-stone-500 dark:text-stone-400 text-lg leading-relaxed">
+                {error}
+              </p>
+            </div>
           ) : loading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
               {[...Array(8)].map((_, idx) => (
